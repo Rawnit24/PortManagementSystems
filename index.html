@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Container Yard Simulator</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+  <!-- Three.js and OrbitControls -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+  <header class="site-header">
+    <h1>Container Yard Simulator</h1>
+    <p class="subtitle">Port Yard Management Interface</p>
+  </header>
+
+  <div id="placement-banner" class="placement-banner hidden">
+    <div class="banner-content">
+      <span id="banner-text">Placing: [Type] | Orientation: Horizontal | Press R to rotate | ESC to cancel</span>
+    </div>
+  </div>
+
+  <nav class="tabs-nav">
+    <button class="tab-btn active" data-target="tab-containers">Containers</button>
+    <button class="tab-btn" data-target="tab-shipyard">Shipyard (3D View)</button>
+  </nav>
+
+  <main class="main-content">
+
+    <!-- TAB 1: CONTAINERS -->
+    <div id="tab-containers" class="tab-pane active">
+      <div class="containers-header">
+        <div class="header-actions">
+          <span id="container-status" class="container-status hidden"></span>
+          <button id="btn-stress-test" class="btn-secondary" onclick="runStressTest()">Stress Test</button>
+          <button id="btn-add-manual" class="btn-primary" onclick="openModal('manual')">Create Manual</button>
+        </div>
+      </div>
+      <div class="table-wrapper">
+        <table id="containers-table" class="data-table">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Size</th>
+              <th>Priority</th>
+              <th>Weight</th>
+              <th>Destination</th>
+              <th>Arrival</th>
+              <th>Departure</th>
+              <th>Location</th>
+              <th>Level</th>
+            </tr>
+          </thead>
+          <tbody id="containers-tbody">
+            <!-- Data injected via JS -->
+            <tr class="empty-row"><td colspan="11">No containers available.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="analytics-container">
+        <h2>Analytics Dashboard</h2>
+        <div class="kpi-row">
+          <div class="kpi-card">
+            <h3>Total Containers</h3>
+            <div id="total-containers" class="kpi-value">0</div>
+          </div>
+          <div class="kpi-card">
+            <h3>High Priority</h3>
+            <div id="high-priority" class="kpi-value">0</div>
+          </div>
+          <div class="kpi-card">
+            <h3>Avg Stack Height</h3>
+            <div id="avg-stack" class="kpi-value">0.0</div>
+          </div>
+          <div class="kpi-card">
+            <h3>Low Priority</h3>
+            <div id="ready-ship" class="kpi-value">0</div>
+          </div>
+        </div>
+
+        <div class="charts-row">
+          <div class="chart-card">
+            <canvas id="sectionBarChart"></canvas>
+          </div>
+          <div class="chart-card">
+            <canvas id="typeBarChart"></canvas>
+          </div>
+        </div>
+
+        <div class="charts-row">
+          <div class="chart-card">
+            <canvas id="stackBarChart"></canvas>
+          </div>
+        </div>
+
+        <div class="insights-panel" id="insights"></div>
+      </div>
+    </div>
+
+      <!-- TAB 2: SHIPYARD -->
+    <div id="tab-shipyard" class="tab-pane hidden">
+      <div class="shipyard-wrapper">
+        
+        <!-- Sidebar -->
+        <aside class="shipyard-sidebar">
+          <div class="sidebar-widget">
+            <button class="btn btn-primary btn-full" onclick="openModal('3d')">+ Create (3D Placement)</button>
+          </div>
+
+          <div class="sidebar-widget">
+            <h4 class="widget-title">Current Mode</h4>
+            <div id="mode-status" class="status-indicator">
+              <span class="status-dot"></span>
+              <span id="mode-text">Normal View</span>
+            </div>
+          </div>
+
+          <div class="sidebar-widget">
+            <h4 class="widget-title">Selection Info</h4>
+            <div id="selection-info-display" class="selection-info">
+              <p class="text-secondary" style="font-size: 0.8rem;">Click a container to see details.</p>
+            </div>
+          </div>
+
+          <div id="widget-tips" class="sidebar-widget hidden">
+            <h4 class="widget-title">Quick Tips</h4>
+            <div class="tip-item">
+              <span class="tip-key">R</span> <span>Rotate footprint</span>
+            </div>
+            <div class="tip-item">
+              <span class="tip-key">ESC</span> <span>Cancel placement</span>
+            </div>
+            <div class="tip-item">
+              <span class="tip-key">DRAG</span> <span>Move container</span>
+            </div>
+          </div>
+        </aside>
+
+        <!-- Main Content Area -->
+        <div class="shipyard-main">
+          <!-- 3D Container View -->
+          <div class="three-view-wrapper">
+            <div id="three-container"></div>
+            <div id="three-tooltip" class="hidden"></div>
+          </div>
+
+          <div class="yard-layout">
+            <!-- Section A: Outbound -->
+            <section class="yard-section section-a">
+              <h2 class="section-title">Section A</h2>
+              <p class="section-label">Outbound</p>
+              <div class="grid-container" id="grid-a"></div>
+            </section>
+
+            <!-- Section B: Inbound -->
+            <section class="yard-section section-b">
+              <h2 class="section-title">Section B</h2>
+              <p class="section-label">Inbound</p>
+              <div class="grid-container" id="grid-b"></div>
+            </section>
+
+            <!-- Section C: Processing -->
+            <section class="yard-section section-c">
+              <h2 class="section-title">Section C</h2>
+              <p class="section-label">Processing</p>
+              <div class="grid-container" id="grid-c"></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer class="site-footer">
+    <p>Container Yard Simulator &mdash; Phase 1</p>
+  </footer>
+
+  <!-- Stack Inspection Side Panel -->
+  <aside id="inspection-panel" class="inspection-panel">
+    <div class="panel-header">
+      <h3 id="panel-title">Stack Details</h3>
+      <button class="panel-close" onclick="closeInspectionPanel()">&times;</button>
+    </div>
+    <div id="panel-content" class="panel-content">
+      <!-- Container cards injected via JS -->
+    </div>
+  </aside>
+
+  <!-- Container Creation Modal -->
+  <div id="modal-overlay" class="modal-overlay hidden">
+    <div class="modal">
+
+      <div class="modal-header">
+        <h3 class="modal-title">Create Container</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+
+      <form id="container-form" class="modal-form">
+
+        <div class="form-group">
+          <label for="field-name">Container Name</label>
+          <input type="text" id="field-name" placeholder="e.g. MSCU-8042" required />
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="field-type">Type</label>
+            <select id="field-type" required>
+              <option value="Dry">Dry</option>
+              <option value="Reefer">Reefer</option>
+              <option value="Hazardous">Hazardous</option>
+              <option value="Tank">Tank</option>
+              <option value="Open Top">Open Top</option>
+              <option value="Flat Rack">Flat Rack</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="field-size">Size</label>
+            <select id="field-size" required>
+              <option value="20ft">20ft</option>
+              <option value="40ft">40ft</option>
+              <option value="45ft">45ft</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="field-orientation">Orientation (40/45ft)</label>
+            <select id="field-orientation">
+              <option value="horizontal">Horizontal (Col-span)</option>
+              <option value="vertical">Vertical (Row-span)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="field-weight">Weight (kg)</label>
+          <input type="number" id="field-weight" placeholder="e.g. 18000" min="1" required />
+        </div>
+
+        <div class="form-group">
+          <label for="field-destination">Destination</label>
+          <input type="text" id="field-destination" placeholder="e.g. Rotterdam" required />
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="field-arrival">Arrival Date</label>
+            <input type="date" id="field-arrival" required />
+          </div>
+          <div class="form-group">
+            <label for="field-departure">Departure Date</label>
+            <input type="date" id="field-departure" required />
+          </div>
+        </div>
+
+        <!-- Manual Coordinates (Visible only in Manual Mode) -->
+        <div id="manual-coordinates" class="hidden">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="field-section">Section</label>
+              <select id="field-section">
+                <option value="A">Section A</option>
+                <option value="B">Section B</option>
+                <option value="C">Section C</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label for="field-row">Row (0-9)</label>
+              <input type="number" id="field-row" min="0" max="9" placeholder="0" />
+            </div>
+            <div class="form-group">
+              <label for="field-col">Col (0-9)</label>
+              <input type="number" id="field-col" min="0" max="9" placeholder="0" />
+            </div>
+          </div>
+        </div>
+
+        <div id="suggestion-box" class="suggestion-box">
+           <strong>💡 Tip:</strong> <span id="suggestion-text">Enter container details then click on the yard grid to place.</span>
+        </div>
+
+        <button type="submit" class="btn-submit">Create Container</button>
+      </form>
+
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
