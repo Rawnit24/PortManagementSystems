@@ -1,7 +1,8 @@
-import { useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
 import { getPositionKey, validatePlacement, sectionOffset, getFootprint } from '../utils/yardLogic';
+import gsap from 'gsap';
 
 const COLOR_MAP = {
   'Dry': 0x3b82f6,
@@ -57,6 +58,8 @@ export default function ThreeView({
   const ghost3DRowRef = useRef(null);
   const ghost3DColRef = useRef(null);
   const ghost3DSectionRef = useRef('A');
+
+  const [isSceneReady, setIsSceneReady] = useState(false);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -287,6 +290,8 @@ export default function ThreeView({
       renderer.render(scene, cameraRef.current);
     }
     animate();
+    
+    setIsSceneReady(true);
 
     return () => {
       window.removeEventListener('resize', handleResize);
@@ -299,49 +304,84 @@ export default function ThreeView({
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Update container meshes when containerMap changes
+  const meshMapRef = useRef({}); // id -> THREE.Group
+
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
 
-    containerMeshesRef.current.forEach(m => scene.remove(m));
-    containerMeshesRef.current = [];
+    const currentIds = new Set(Object.keys(containerMap));
 
+    // 1. Remove meshes that are no longer in the map
+    Object.keys(meshMapRef.current).forEach(id => {
+      if (!currentIds.has(id)) {
+        scene.remove(meshMapRef.current[id]);
+        delete meshMapRef.current[id];
+      }
+    });
+
+    // 2. Update or Create meshes
     Object.values(containerMap).forEach(c => {
       const is40ft = c.size === '40ft' || c.size === '45ft';
       const isVertical = c.orientation === 'vertical';
       const width = isVertical ? 1 : (is40ft ? 4 : 2);
       const depth = isVertical ? (is40ft ? 4 : 2) : 1;
 
-      const geo = new THREE.BoxGeometry(width, 1, depth);
-      const color = COLOR_MAP[c.type] || 0x4ade80;
-      const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color }));
-      const outline = new THREE.LineSegments(
-        new THREE.EdgesGeometry(geo),
-        new THREE.LineBasicMaterial({ color: 0x000000 })
-      );
-
-      const group = new THREE.Group();
-      group.add(mesh);
-      group.add(outline);
-
       const fp = c.footprint;
       const minCol = Math.min(...fp.map(f => f.col));
       const maxCol = Math.max(...fp.map(f => f.col));
       const minRow = Math.min(...fp.map(f => f.row));
       const maxRow = Math.max(...fp.map(f => f.row));
-
       const offset = sectionOffset[c.section] || 0;
-      group.position.set(
-        ((minCol + maxCol) / 2) - 4.5 + offset,
-        c.level + 0.5,
-        ((minRow + maxRow) / 2) - 4.5
-      );
-      group.userData = { container: c };
 
-      scene.add(group);
-      containerMeshesRef.current.push(group);
+      const targetX = ((minCol + maxCol) / 2) - 4.5 + offset;
+      const targetY = c.level + 0.5;
+      const targetZ = ((minRow + maxRow) / 2) - 4.5;
+
+      if (meshMapRef.current[c.id]) {
+        // ANIMATE EXISTING MESH
+        const group = meshMapRef.current[c.id];
+        group.userData.container = c; // keep ref fresh
+
+        // Only animate if position changed
+        if (Math.abs(group.position.x - targetX) > 0.01 || 
+            Math.abs(group.position.y - targetY) > 0.01 || 
+            Math.abs(group.position.z - targetZ) > 0.01) {
+          gsap.to(group.position, {
+            x: targetX,
+            y: targetY,
+            z: targetZ,
+            duration: 0.6,
+            ease: "power2.inOut"
+          });
+        }
+      } else {
+        // CREATE NEW MESH
+        const geo = new THREE.BoxGeometry(width, 1, depth);
+        const color = COLOR_MAP[c.type] || 0x4ade80;
+        const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color }));
+        const outline = new THREE.LineSegments(
+          new THREE.EdgesGeometry(geo),
+          new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.3 })
+        );
+
+        const group = new THREE.Group();
+        group.add(mesh);
+        group.add(outline);
+        group.position.set(targetX, targetY, targetZ);
+        group.userData = { container: c };
+
+        scene.add(group);
+        meshMapRef.current[c.id] = group;
+
+        // Entry animation
+        gsap.from(group.scale, { x: 0, y: 0, z: 0, duration: 0.4, ease: "back.out(1.7)" });
+      }
     });
-  }, [containerMap]);
+
+    // Sync raycasting array
+    containerMeshesRef.current = Object.values(meshMapRef.current);
+  }, [containerMap, isSceneReady]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>

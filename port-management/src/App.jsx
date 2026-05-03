@@ -30,6 +30,7 @@ function App() {
   // draggedContainerId: the ID being dragged (for source-cell visual + preview). Only set after threshold.
   const [draggedContainerId, setDraggedContainerId] = useState(null);
   const [dragPreview, setDragPreview] = useState(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
 
   const counterRef = useRef(0);
   // Internal drag state — never causes re-renders on its own
@@ -270,12 +271,14 @@ function App() {
     dragStateRef.current = { containerId: id, isActive: false };
 
     const onMouseMove = (moveEvent) => {
-      if (dragStateRef.current.isActive) return;
       const dist = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
-      if (dist > 5) {
+      if (!dragStateRef.current.isActive && dist > 5) {
         dragStateRef.current.isActive = true;
-        setDraggedContainerId(id);  // triggers source-cell .dragging class
+        setDraggedContainerId(id);
         document.body.style.cursor = 'grabbing';
+      }
+      if (dragStateRef.current.isActive) {
+        setMousePos({ x: moveEvent.clientX, y: moveEvent.clientY });
       }
     };
 
@@ -506,6 +509,38 @@ function App() {
         onClose={() => setIsModalOpen(false)}
         onSubmit={handleModalSubmit}
       />
+
+      {/* Floating Drag Ghost */}
+      {draggedContainerId && (
+        <div 
+          className="drag-ghost"
+          style={{
+            position: 'fixed',
+            left: mousePos.x,
+            top: mousePos.y,
+            transform: 'translate(-50%, -50%)',
+            pointerEvents: 'none',
+            zIndex: 3000,
+            width: containerMap[draggedContainerId]?.size === '20ft' ? '60px' : '100px',
+            height: '40px',
+            background: containerMap[draggedContainerId]?.type === 'Hazardous' ? 'var(--ef4444, #ef4444)' : 'var(--accent-primary)',
+            borderRadius: '6px',
+            opacity: 0.9,
+            boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: '0.75rem',
+            fontWeight: '900',
+            color: 'white',
+            border: '2px solid rgba(255,255,255,0.3)',
+            backdropFilter: 'blur(8px)',
+            transition: 'transform 0.1s ease-out'
+          }}
+        >
+          {draggedContainerId}
+        </div>
+      )}
     </div>
   );
 }
