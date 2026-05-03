@@ -1,59 +1,79 @@
-import React from 'react';
-import { getPositionKey } from '../utils/yardLogic';
+import { useState } from 'react';
+import { getPositionKey, SECTION_LABELS } from '../utils/yardLogic';
 
-const GridCell = ({ 
-  section, 
-  row, 
-  col, 
-  stack, 
-  containerMap, 
-  onClick, 
-  onDragStart, 
-  onDragEnter, 
-  onDrop,
-  dragPreview,
-  placementPreview // New prop
-}) => {
+function GridCell({
+  section, row, col, stack, containerMap,
+  onClick, onDragStart, onDragEnter, onDrop,
+  onCellMouseEnter, onCellMouseLeave,
+  dragPreview, footprintHover, isDragSource
+}) {
   const key = getPositionKey(section, row, col);
-  const topContainerId = stack && stack.length > 0 ? stack[stack.length - 1] : null;
-  const topContainer = topContainerId ? containerMap[topContainerId] : null;
+  const topId = stack && stack.length > 0 ? stack[stack.length - 1] : null;
+  const topContainer = topId ? containerMap[topId] : null;
 
-  const isDragValid = dragPreview && dragPreview.footprint.some(f => f.key === key) && dragPreview.valid;
-  const isDragInvalid = dragPreview && dragPreview.footprint.some(f => f.key === key) && !dragPreview.valid;
-  
-  const isPlaceValid = placementPreview && placementPreview.footprint.some(f => f.key === key) && placementPreview.valid;
-  const isPlaceInvalid = placementPreview && placementPreview.footprint.some(f => f.key === key) && !placementPreview.valid;
+  const isPreviewValid = dragPreview?.footprint?.some(f => f.key === key) && dragPreview.valid;
+  const isPreviewInvalid = dragPreview?.footprint?.some(f => f.key === key) && !dragPreview.valid;
+  const isFootprintHovered = footprintHover?.includes(key);
 
-  const isValid = isDragValid || isPlaceValid;
-  const isInvalid = isDragInvalid || isPlaceInvalid;
+  let cellClass = 'grid-cell';
+  if (topContainer) cellClass += ' occupied';
+  if (isDragSource) cellClass += ' dragging';
+  if (isPreviewValid) cellClass += ' preview-valid';
+  if (isPreviewInvalid) cellClass += ' preview-invalid';
+  if (isFootprintHovered && !isDragSource) cellClass += ' footprint-hover';
 
   return (
-    <div 
-      className={`grid-cell ${topContainer ? 'occupied' : ''} ${isValid ? 'preview-valid' : ''} ${isInvalid ? 'preview-invalid' : ''}`}
+    <div
+      className={cellClass}
       onClick={() => onClick(key)}
-      onMouseDown={(e) => onDragStart && onDragStart(e, key, topContainerId)}
-      onMouseEnter={() => onDragEnter && onDragEnter(key)}
-      onMouseUp={() => onDrop && onDrop(key)}
+      onMouseDown={(e) => onDragStart?.(e, key, topId)}
+      onMouseEnter={() => { onDragEnter?.(key); onCellMouseEnter?.(key); }}
+      onMouseUp={() => onDrop?.(key)}
+      onMouseLeave={onCellMouseLeave}
     >
       {topContainer && (
-        <span className="container-id-label">{topContainer.id}</span>
-      )}
-      {stack && stack.length > 0 && (
-        <div className="stack-indicator">
-          {stack.map((_, i) => <div key={i} className="stack-bar" />)}
-        </div>
+        <>
+          {(topContainer.origin?.row === row && topContainer.origin?.col === col) && (
+            <span className="container-id-label">{topContainer.id}</span>
+          )}
+          <div className="stack-indicator">
+            {stack.map((_, i) => <div key={i} className="stack-bar" />)}
+          </div>
+        </>
       )}
     </div>
   );
-};
+}
 
-const YardGrid = ({ section, yard, containerMap, onCellClick, ...dragHandlers }) => {
+export default function YardGrid({
+  section, yard, containerMap,
+  onCellClick, onDragStart, onDragEnter, onDrop,
+  dragPreview, draggedContainerId
+}) {
+  const [footprintHover, setFootprintHover] = useState(null);
+
+  // Keys belonging to the dragged container's footprint — for source-cell .dragging class
+  const dragSourceKeys = draggedContainerId
+    ? (containerMap[draggedContainerId]?.footprint?.map(f => f.key) ?? [])
+    : [];
+
+  const handleCellMouseEnter = (key) => {
+    if (draggedContainerId) return; // suppress footprint hover while dragging
+    const stack = yard[key];
+    if (!stack || stack.length === 0) { setFootprintHover(null); return; }
+    const topId = stack[stack.length - 1];
+    const container = containerMap[topId];
+    if (container?.footprint) {
+      setFootprintHover(container.footprint.map(f => f.key));
+    }
+  };
+
   const cells = [];
   for (let r = 0; r < 10; r++) {
     for (let c = 0; c < 10; c++) {
       const key = getPositionKey(section, r, c);
       cells.push(
-        <GridCell 
+        <GridCell
           key={key}
           section={section}
           row={r}
@@ -61,7 +81,14 @@ const YardGrid = ({ section, yard, containerMap, onCellClick, ...dragHandlers })
           stack={yard[key]}
           containerMap={containerMap}
           onClick={onCellClick}
-          {...dragHandlers}
+          onDragStart={onDragStart}
+          onDragEnter={onDragEnter}
+          onDrop={onDrop}
+          onCellMouseEnter={handleCellMouseEnter}
+          onCellMouseLeave={() => !draggedContainerId && setFootprintHover(null)}
+          dragPreview={dragPreview}
+          footprintHover={footprintHover}
+          isDragSource={dragSourceKeys.includes(key)}
         />
       );
     }
@@ -70,11 +97,10 @@ const YardGrid = ({ section, yard, containerMap, onCellClick, ...dragHandlers })
   return (
     <section className={`yard-section section-${section.toLowerCase()}`}>
       <h2 className="section-title">Section {section}</h2>
+      <p className="section-label">{SECTION_LABELS[section]}</p>
       <div className="grid-container">
         {cells}
       </div>
     </section>
   );
-};
-
-export default YardGrid;
+}

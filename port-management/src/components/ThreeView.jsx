@@ -1,145 +1,370 @@
-import React, { useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import { getPositionKey } from '../utils/yardLogic';
+import { getPositionKey, validatePlacement, sectionOffset, getFootprint } from '../utils/yardLogic';
 
-const ThreeView = ({ yard, containerMap, onCellClick, placementMode }) => {
-  const containerRef = useRef();
-  const sceneRef = useRef();
-  const rendererRef = useRef();
-  const cameraRef = useRef();
-  const meshesRef = useRef({});
+const COLOR_MAP = {
+  'Dry': 0x3b82f6,
+  'Reefer': 0x22c55e,
+  'Hazardous': 0xef4444,
+  'Tank': 0xeab308,
+  'Open Top': 0xa855f7,
+  'Flat Rack': 0xa8a29e
+};
+
+function worldXToSection(x) {
+  if (x >= -5 && x < 5) return 'A';
+  if (x >= 7 && x < 17) return 'B';
+  if (x >= 19 && x < 29) return 'C';
+  return null;
+}
+
+export default function ThreeView({
+  yard,
+  containerMap,
+  currentPlacementContainer,
+  currentPlacementOrientation,
+  onPlaceContainer,
+  onContainerClick
+}) {
+  const mountRef = useRef(null);
+  const tooltipRef = useRef(null);
+
+  const yardRef = useRef(yard);
+  const containerMapRef = useRef(containerMap);
+  const placementContainerRef = useRef(currentPlacementContainer);
+  const placementOrientationRef = useRef(currentPlacementOrientation);
+  const onPlaceRef = useRef(onPlaceContainer);
+  const onClickRef = useRef(onContainerClick);
+
+  useEffect(() => { yardRef.current = yard; }, [yard]);
+  useEffect(() => { containerMapRef.current = containerMap; }, [containerMap]);
+  useEffect(() => { placementContainerRef.current = currentPlacementContainer; }, [currentPlacementContainer]);
+  useEffect(() => { placementOrientationRef.current = currentPlacementOrientation; }, [currentPlacementOrientation]);
+  useEffect(() => { onPlaceRef.current = onPlaceContainer; }, [onPlaceContainer]);
+  useEffect(() => { onClickRef.current = onContainerClick; }, [onContainerClick]);
+
+  const sceneRef = useRef(null);
+  const rendererRef = useRef(null);
+  const cameraRef = useRef(null);
+  const controlsRef = useRef(null);
+  const containerMeshesRef = useRef([]);
+  const ghostMeshesRef = useRef([]);
+  const groundPlanesRef = useRef([]);
+  const raycasterRef = useRef(null);
+  const mouseRef = useRef(new THREE.Vector2());
+  const hoveredMeshRef = useRef(null);
+  const ghost3DRowRef = useRef(null);
+  const ghost3DColRef = useRef(null);
+  const ghost3DSectionRef = useRef('A');
 
   useEffect(() => {
+    const mount = mountRef.current;
+    if (!mount) return;
+
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x05070a);
+    scene.background = new THREE.Color(0x0b0f1e);
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(75, containerRef.current.clientWidth / containerRef.current.clientHeight, 0.1, 1000);
-    camera.position.set(25, 25, 25);
+    const camera = new THREE.PerspectiveCamera(45, mount.clientWidth / mount.clientHeight || 1, 0.1, 1000);
+    camera.position.set(12, 20, 20);
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
-    containerRef.current.appendChild(renderer.domElement);
+    renderer.setSize(mount.clientWidth || 800, mount.clientHeight || 500);
+    mount.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
     const controls = new OrbitControls(camera, renderer.domElement);
+    controls.target.set(12, 0, 0);
     controls.enableDamping = true;
+    controls.update();
+    controlsRef.current = controls;
 
-    // Lights
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    directionalLight.position.set(10, 20, 10);
-    scene.add(directionalLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    scene.add(dirLight);
 
-    // Grid Helper - 3 sections
-    const gridHelper = new THREE.GridHelper(60, 30, 0x3b82f6, 0x1e293b);
-    gridHelper.position.y = 0.01;
-    scene.add(gridHelper);
+    const planeMat = new THREE.MeshStandardMaterial({ color: 0x1e2130 });
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(50, 20), planeMat);
+    plane.rotation.x = -Math.PI / 2;
+    plane.position.set(12, 0, 0);
+    scene.add(plane);
 
-    // Click handling via Raycaster
-    const raycaster = new THREE.Raycaster();
-    const mouse = new THREE.Vector2();
+    [0, 12, 24].forEach(offset => {
+      const gh = new THREE.GridHelper(10, 10, 0xffffff, 0xffffff);
+      gh.position.set(offset, 0.01, 0);
+      gh.material.opacity = 0.2;
+      gh.material.transparent = true;
+      scene.add(gh);
+    });
 
-    const onMouseDown = (event) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    const gps = [];
+    [0, 12, 24].forEach(offset => {
+      const gp = new THREE.Mesh(
+        new THREE.PlaneGeometry(10, 10),
+        new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide })
+      );
+      gp.rotation.x = -Math.PI / 2;
+      gp.position.set(offset, 0.001, 0);
+      scene.add(gp);
+      gps.push({ mesh: gp, offset });
+    });
+    groundPlanesRef.current = gps;
 
-      raycaster.setFromCamera(mouse, camera);
-      
-      // Raycast against a virtual plane at y=0 for grid placement
-      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-      const intersectionPoint = new THREE.Vector3();
-      if (raycaster.ray.intersectPlane(plane, intersectionPoint)) {
-        // Map intersectionPoint to section, row, col
-        let x = intersectionPoint.x;
-        let z = intersectionPoint.z;
+    raycasterRef.current = new THREE.Raycaster();
 
-        let section = 'B';
-        if (x < -10) { section = 'A'; x += 20; }
-        else if (x > 10) { section = 'C'; x -= 20; }
+    function clearGhosts() {
+      ghostMeshesRef.current.forEach(m => scene.remove(m));
+      ghostMeshesRef.current = [];
+    }
 
-        const col = Math.round((x / 2) + 4.5);
-        const row = Math.round((z / 2) + 4.5);
+    function showGhost(footprint, valid, section) {
+      clearGhosts();
+      const color = valid ? 0x22c55e : 0xef4444;
+      const offset = sectionOffset[section] || 0;
+      footprint.forEach(f => {
+        const mat = new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.45, depthWrite: false });
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), mat);
+        const yStack = (yardRef.current[f.key] ? yardRef.current[f.key].length : 0);
+        mesh.position.set(f.col - 4.5 + offset, yStack + 0.5, f.row - 4.5);
+        mesh.userData.isGhost = true;
+        scene.add(mesh);
+        ghostMeshesRef.current.push(mesh);
+      });
+    }
 
-        if (col >= 0 && col < 10 && row >= 0 && row < 10) {
-          onCellClick(getPositionKey(section, row, col));
+    function onMouseMove(event) {
+      const tooltip = tooltipRef.current;
+      const rect = mount.getBoundingClientRect();
+      mouseRef.current.x = ((event.clientX - rect.left) / mount.clientWidth) * 2 - 1;
+      mouseRef.current.y = -((event.clientY - rect.top) / mount.clientHeight) * 2 + 1;
+      raycasterRef.current.setFromCamera(mouseRef.current, cameraRef.current);
+
+      if (placementContainerRef.current) {
+        if (tooltip) tooltip.classList.add('hidden');
+        if (hoveredMeshRef.current) {
+          const child = hoveredMeshRef.current.children.find(c => c.isMesh);
+          if (child) child.material.emissive.setHex(hoveredMeshRef.current._savedEmissive || 0);
+          hoveredMeshRef.current = null;
         }
+        const gpMeshes = groundPlanesRef.current.map(g => g.mesh);
+        const hits = raycasterRef.current.intersectObjects(gpMeshes, false);
+        if (!hits.length) { clearGhosts(); return; }
+
+        const hit = hits[0].point;
+        const section = worldXToSection(hit.x);
+        if (!section) { clearGhosts(); return; }
+
+        const offset = sectionOffset[section] || 0;
+        const col = Math.max(0, Math.min(9, Math.floor(hit.x - offset + 5)));
+        const row = Math.max(0, Math.min(9, Math.floor(hit.z + 5)));
+
+        if (row === ghost3DRowRef.current && col === ghost3DColRef.current && section === ghost3DSectionRef.current) return;
+        ghost3DRowRef.current = row;
+        ghost3DColRef.current = col;
+        ghost3DSectionRef.current = section;
+
+        const pc = placementContainerRef.current;
+        const orient = placementOrientationRef.current;
+        const validation = validatePlacement(yardRef.current, containerMapRef.current, section, pc.size, row, col, orient);
+        const fp = validation.footprint || getFootprint(section, pc.size, row, col, orient) || [];
+        showGhost(fp, validation.valid, section);
+        return;
       }
-    };
 
-    renderer.domElement.addEventListener('mousedown', onMouseDown);
+      clearGhosts();
+      const intersects = raycasterRef.current.intersectObjects(containerMeshesRef.current, true);
 
-    const animate = () => {
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    };
-    animate();
+      if (intersects.length > 0) {
+        let obj = intersects[0].object;
+        while (obj.parent && !obj.userData.container) obj = obj.parent;
+
+        if (hoveredMeshRef.current !== obj) {
+          if (hoveredMeshRef.current) {
+            const child = hoveredMeshRef.current.children.find(c => c.isMesh);
+            if (child) child.material.emissive.setHex(hoveredMeshRef.current._savedEmissive || 0);
+          }
+          hoveredMeshRef.current = obj;
+          const child = obj.children.find(c => c.isMesh);
+          if (child) {
+            obj._savedEmissive = child.material.emissive.getHex();
+            const priority = obj.userData.container?.priority;
+            child.material.emissive.setHex(
+              priority === 'high' ? 0xff0000 : priority === 'medium' ? 0xffaa00 : 0x00ff00
+            );
+          }
+          mount.style.cursor = 'pointer';
+        }
+
+        if (tooltip && obj.userData.container) {
+          const c = obj.userData.container;
+          const stack = yardRef.current[c.footprint[0].key] || [];
+          const lines = stack.map(cid => {
+            const ac = containerMapRef.current[cid];
+            return ac ? `[L${ac.level}] [${ac.priority.toUpperCase()}] ${ac.id} - ${ac.name} (${ac.type})` : '';
+          }).reverse().join('\n');
+          tooltip.textContent = `Stack at ${c.location}\n${lines}`;
+          tooltip.classList.remove('hidden');
+          tooltip.style.left = (event.clientX + 15) + 'px';
+          tooltip.style.top = (event.clientY + 15) + 'px';
+        }
+      } else {
+        if (hoveredMeshRef.current) {
+          const child = hoveredMeshRef.current.children.find(c => c.isMesh);
+          if (child) child.material.emissive.setHex(hoveredMeshRef.current._savedEmissive || 0);
+          hoveredMeshRef.current = null;
+          mount.style.cursor = 'grab';
+        }
+        if (tooltip) tooltip.classList.add('hidden');
+      }
+    }
+
+    function onMouseClick() {
+      if (placementContainerRef.current) {
+        if (ghost3DRowRef.current !== null) {
+          const validation = validatePlacement(
+            yardRef.current,
+            containerMapRef.current,
+            ghost3DSectionRef.current,
+            placementContainerRef.current.size,
+            ghost3DRowRef.current,
+            ghost3DColRef.current,
+            placementOrientationRef.current
+          );
+          if (validation.valid) {
+            onPlaceRef.current(ghost3DSectionRef.current, ghost3DRowRef.current, ghost3DColRef.current);
+          }
+        }
+        return;
+      }
+
+      const intersects = raycasterRef.current.intersectObjects(containerMeshesRef.current, true);
+      if (!intersects.length) return;
+
+      let obj = intersects[0].object;
+      while (obj.parent && !obj.userData.container) obj = obj.parent;
+      const c = obj.userData.container;
+      if (!c) return;
+
+      const origin = c.origin || { row: c.row, col: c.col };
+      onClickRef.current({
+        key: getPositionKey(c.section, origin.row, origin.col),
+        section: c.section,
+        row: origin.row,
+        col: origin.col
+      });
+    }
+
+    function onMouseLeave() {
+      if (tooltipRef.current) tooltipRef.current.classList.add('hidden');
+      if (hoveredMeshRef.current) {
+        const child = hoveredMeshRef.current.children.find(c => c.isMesh);
+        if (child) child.material.emissive.setHex(hoveredMeshRef.current._savedEmissive || 0);
+        hoveredMeshRef.current = null;
+      }
+    }
+
+    mount.addEventListener('mousemove', onMouseMove);
+    mount.addEventListener('click', onMouseClick);
+    mount.addEventListener('mouseleave', onMouseLeave);
 
     const handleResize = () => {
-      if (!containerRef.current) return;
-      camera.aspect = containerRef.current.clientWidth / containerRef.current.clientHeight;
-      camera.updateProjectionMatrix();
-      renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+      if (!mount || !cameraRef.current || !rendererRef.current) return;
+      const w = mount.clientWidth;
+      const h = mount.clientHeight;
+      if (w === 0 || h === 0) return;
+      cameraRef.current.aspect = w / h;
+      cameraRef.current.updateProjectionMatrix();
+      rendererRef.current.setSize(w, h);
     };
     window.addEventListener('resize', handleResize);
 
+    function animate() {
+      requestAnimationFrame(animate);
+      if (controlsRef.current) controlsRef.current.update();
+      renderer.render(scene, cameraRef.current);
+    }
+    animate();
+
     return () => {
       window.removeEventListener('resize', handleResize);
-      renderer.domElement.removeEventListener('mousedown', onMouseDown);
+      mount.removeEventListener('mousemove', onMouseMove);
+      mount.removeEventListener('click', onMouseClick);
+      mount.removeEventListener('mouseleave', onMouseLeave);
       renderer.dispose();
-      if (containerRef.current) containerRef.current.removeChild(renderer.domElement);
+      if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
     };
-  }, [onCellClick]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Update Meshes
+  // Update container meshes when containerMap changes
   useEffect(() => {
-    if (!sceneRef.current) return;
     const scene = sceneRef.current;
+    if (!scene) return;
 
-    Object.values(meshesRef.current).forEach(m => scene.remove(m));
-    meshesRef.current = {};
+    containerMeshesRef.current.forEach(m => scene.remove(m));
+    containerMeshesRef.current = [];
 
     Object.values(containerMap).forEach(c => {
-      const isLarge = c.size === '40ft' || c.size === '45ft';
-      const geometry = new THREE.BoxGeometry(
-        isLarge && c.orientation === 'horizontal' ? 3.8 : 1.8, 
-        1.8, 
-        isLarge && c.orientation === 'vertical' ? 3.8 : 1.8
+      const is40ft = c.size === '40ft' || c.size === '45ft';
+      const isVertical = c.orientation === 'vertical';
+      const width = isVertical ? 1 : (is40ft ? 4 : 2);
+      const depth = isVertical ? (is40ft ? 4 : 2) : 1;
+
+      const geo = new THREE.BoxGeometry(width, 1, depth);
+      const color = COLOR_MAP[c.type] || 0x4ade80;
+      const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color }));
+      const outline = new THREE.LineSegments(
+        new THREE.EdgesGeometry(geo),
+        new THREE.LineBasicMaterial({ color: 0x000000 })
       );
-      
-      const color = c.section === 'A' ? 0x10b981 : c.section === 'B' ? 0x3b82f6 : 0xf59e0b;
-      const material = new THREE.MeshPhongMaterial({ 
-        color, 
-        transparent: true, 
-        opacity: 0.9,
-        shininess: 100
-      });
-      
-      const mesh = new THREE.Mesh(geometry, material);
-      
-      const f0 = c.footprint[0];
-      const sectionOffset = c.section === 'A' ? -20 : c.section === 'B' ? 0 : 20;
-      
-      let x = (f0.col - 4.5) * 2 + sectionOffset;
-      let z = (f0.row - 4.5) * 2;
-      let y = c.level * 2 + 1;
 
-      if (isLarge) {
-        if (c.orientation === 'horizontal') x += 1;
-        else z += 1;
-      }
+      const group = new THREE.Group();
+      group.add(mesh);
+      group.add(outline);
 
-      mesh.position.set(x, y, z);
-      scene.add(mesh);
-      meshesRef.current[c.id] = mesh;
+      const fp = c.footprint;
+      const minCol = Math.min(...fp.map(f => f.col));
+      const maxCol = Math.max(...fp.map(f => f.col));
+      const minRow = Math.min(...fp.map(f => f.row));
+      const maxRow = Math.max(...fp.map(f => f.row));
+
+      const offset = sectionOffset[c.section] || 0;
+      group.position.set(
+        ((minCol + maxCol) / 2) - 4.5 + offset,
+        c.level + 0.5,
+        ((minRow + maxRow) / 2) - 4.5
+      );
+      group.userData = { container: c };
+
+      scene.add(group);
+      containerMeshesRef.current.push(group);
     });
-  }, [containerMap, yard]);
+  }, [containerMap]);
 
-  return <div ref={containerRef} id="three-container" />;
-};
-
-export default ThreeView;
+  return (
+    <div style={{ position: 'relative', width: '100%', height: '100%' }}>
+      <div ref={mountRef} id="three-container" />
+      <div
+        ref={tooltipRef}
+        id="three-tooltip"
+        className="hidden"
+        style={{
+          position: 'fixed',
+          background: 'rgba(10,15,28,0.92)',
+          border: '1px solid rgba(255,255,255,0.1)',
+          borderRadius: '8px',
+          padding: '10px 14px',
+          color: '#f8fafc',
+          fontSize: '0.78rem',
+          fontFamily: 'monospace',
+          whiteSpace: 'pre',
+          pointerEvents: 'none',
+          zIndex: 500,
+          maxWidth: '320px'
+        }}
+      />
+    </div>
+  );
+}
