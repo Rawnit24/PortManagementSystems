@@ -300,6 +300,10 @@ export default function ThreeView({
       mount.removeEventListener('mouseleave', onMouseLeave);
       renderer.dispose();
       if (mount.contains(renderer.domElement)) mount.removeChild(renderer.domElement);
+      
+      // CRITICAL: Clear mesh cache when scene is destroyed
+      meshMapRef.current = {};
+      setIsSceneReady(false);
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
